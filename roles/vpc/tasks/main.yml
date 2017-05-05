@@ -1,0 +1,80 @@
+---
+- name: Creating an AWS VPC inside mentioned Region
+  ec2_vpc_net: 
+    cidr_block: "{{ vpc_cidr_block }}"
+    name:  "{{vpc_name}}-vpc"
+    resource_tags: { "Name": "{{ vpc_name }}-vpc", "Environment": "{{ ENVIRONMENT }}" }
+    region: "{{ vpc_region }}"
+    state: present
+  register: vpc
+
+- name: setting up vpc fact variable
+  set_fact: vpc="{{vpc.vpc}}"
+
+- name: Create the Internet Gateway
+  ec2_vpc_igw:
+    region: "{{ vpc_region }}"
+    state: present
+    vpc_id: "{{ vpc.id }}"
+  register: igw
+
+- name: Setting all VPC subnets defined in variables
+  ec2_vpc_subnet:
+    az: "{{ item.value.az }}"
+    cidr: "{{ item.value.cidr }}"
+    tags: "{{ item.value.resource_tags }}"
+    vpc_id: "{{ vpc.id }}"
+    region: "{{ vpc_region }}"
+  with_dict: "{{ vpc_subnets }}"
+  register: subnets
+
+# Set fact for Public subnet ids
+- name: Set the fact for Subnet ids variable
+  set_fact: pub_subnets_id="{{ subnets.results | get_subnets_ids_by_tag('Type','Public') }}"
+
+- name: Set up Public Subnets Route Table
+  ec2_vpc_route_table:
+    vpc_id: "{{ vpc.id }}"
+    region: "{{ vpc_region }}"
+    state: present
+    tags:
+      Name: "Public-RT-for-{{ vpc_name }}-vpc {{item.subnet_id}}"
+    subnets: "{{ item.subnet_id }}"
+    routes:
+      - dest: 0.0.0.0/0
+        gateway_id: "{{ igw.gateway_id }}"
+  with_items: "{{pub_subnets_id}}"
+
+# Creating NAT instance for private subnet
+- name: Create the NAT Instance
+  ec2:
+    region: "{{ vpc_region }}"
+    keypair: "{{ ec2_keypair }}"
+    instance_type: "{{ vpc_nat_instance_type }}"
+    image: "{{ vpc_nat_instance_id[vpc_region] }}"
+    vpc_subnet_id: "{{ item.subnet_id }}"
+    wait: true
+    instance_tags: { "Name": "{{ vpc_name }}-NAT instance {{ item.subnet_id }}", "nat_subnet": "{{ item.subnet_id }}", "enviornment": "{{ ENVIRONMENT }}" }
+    source_dest_check: False
+    exact_count: 1
+    assign_public_ip: yes
+    count_tag: 
+      Name: "{{ vpc_name }}-NAT instance {{ item.subnet_id }}"
+  with_items: "{{ pub_subnets_id }}"
+  register: ec2
+
+- name: set nat instance id with subnet
+  set_fact: nat_instances="{{ ec2.results | get_ec2_info() }}"
+
+- name: Set up Private Subnets Route Table
+  ec2_vpc_route_table:
+    vpc_id: "{{ vpc.id }}"
+    region: "{{ vpc_region }}"
+    state: present
+    tags:
+      Name: "Private-RT-for-{{ vpc_name }}-vpc {{ item.az }}"
+    subnets: "{{ subnets.results | get_subnets_ids_by_az(item.az) }}"
+    routes:
+      - dest: 0.0.0.0/0
+        instance_id: "{{ item.instance_id }}"
+  with_items: "{{ nat_instances }}"

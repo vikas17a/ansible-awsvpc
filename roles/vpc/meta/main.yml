@@ -1,0 +1,15 @@
+galaxy_info:
+  author: Vikas Aggarwal
+  description: InfraStructure Engineer
+
+  license: license (GPLv2, CC-BY, etc)
+
+  min_ansible_version: 1.2
+
+  github_branch: master
+
+  galaxy_tags: 
+    - vpc
+    - aws
+
+dependencies: []
